@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FYP — Event-Driven Log Monitor</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+  <h1>Event-Driven Scalable Log Monitoring</h1>
+  <p class="subtitle">Azure AKS · KEDA · Service Bus · Python</p>
+
+  <div class="grid">
+    <div class="card">
+      <div class="card-label">Active Pods</div>
+      <div class="card-value" id="pod-count">—</div>
+      <div class="card-sub">log-processor replicas</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Queue Depth</div>
+      <div class="card-value" id="queue-depth">—</div>
+      <div class="card-sub">Service Bus messages</div>
+    </div>
+    <div class="status-card">
+      <div class="card-label"><span class="dot"></span>Current Load Level</div>
+      <div class="level-badge badge-off" id="level-badge">OFF</div>
+    </div>
+  </div>
+
+  <div class="buttons">
+    <button id="btn-off" onclick="setLevel('off')">⬛ Off</button>
+    <button id="btn-low" onclick="setLevel('low')">🟢 Low</button>
+    <button id="btn-medium" onclick="setLevel('medium')">🟡 Medium</button>
+    <button id="btn-high" onclick="setLevel('high')">🔴 High</button>
+  </div>
+
+  <div class="pipeline">
+    <div class="pipeline-label">Pipeline</div>
+    <div class="pipeline-flow">
+      <div class="pipe-node">Falco<br><small>Detection</small></div>
+      <div class="pipe-arrow">→</div>
+      <div class="pipe-node">Fluent Bit<br><small>Collection</small></div>
+      <div class="pipe-arrow">→</div>
+      <div class="pipe-node">Service Bus<br><small>Buffer</small></div>
+      <div class="pipe-arrow">→</div>
+      <div class="pipe-node">KEDA<br><small>Autoscaler</small></div>
+      <div class="pipe-arrow">→</div>
+      <div class="pipe-node">Processor<br><small>Response</small></div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
