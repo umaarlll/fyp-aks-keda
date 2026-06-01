@@ -1,64 +1,72 @@
 # Event-Driven Scalable Log Monitoring on Azure AKS
 
-A Final Year Project (FYP) implementing an automated security incident response pipeline on Kubernetes using KEDA-based autoscaling.
+A Final Year Project implementing an automated security incident response pipeline on Kubernetes. Falco detects threats, KEDA scales processors based on queue depth, and a response engine takes action in under 150ms.
 
-## Architecture
+---
+
+## How it works
 
 ```
-Falco (threat detection)
-  └── Fluent Bit (log collection)
+Falco (eBPF threat detection)
+  └── Fluent Bit DaemonSet (log collection)
         └── Log Forwarder sidecar (HTTP → Service Bus)
-              └── Azure Service Bus (message queue)
-                    └── KEDA (queue-depth autoscaler)
-                          └── Log Processor (Python, scales 0–10 pods)
-                                └── Response Engine (Kubernetes API actions)
+              └── Azure Service Bus (log-queue)
+                    └── KEDA (scales on queue depth)
+                          └── Log Processor (Python, 0–10 pods)
+                                └── Response Engine (Kubernetes API)
 ```
 
-### Response Tiers
-| Severity | Priority | Action |
+When Falco detects a suspicious event, the log travels through the pipeline and triggers an automated response based on severity — all without human intervention.
+
+### Response tiers
+
+| Severity | Falco Priority | Action |
 |---|---|---|
-| Low | Notice | Tier 1 — Block source IP via NetworkPolicy |
-| Medium | Warning / Error | Tier 2 — Isolate pod (label + deny-all NetworkPolicy) |
-| Critical | Critical / Emergency | Tier 3 — Cordon node (prevent new scheduling) |
+| Low | Notice | Block source IP via NetworkPolicy |
+| Medium | Warning / Error | Isolate pod with deny-all NetworkPolicy |
+| Critical | Critical / Emergency | Cordon node to prevent further scheduling |
 
 ---
 
 ## Stack
 
-| Component | Technology |
+| Layer | Technology |
 |---|---|
-| Threat detection | Falco |
-| Log collection | Fluent Bit 3.0 |
+| Threat detection | Falco (eBPF, modern_ebpf driver) |
+| Log collection | Fluent Bit 3.0 DaemonSet |
+| Log forwarding | Python Flask sidecar |
 | Message queue | Azure Service Bus |
-| Autoscaler | KEDA |
-| Log processor | Python 3.11 + azure-servicebus |
-| Response engine | Python 3.11 + kubernetes |
+| Autoscaler | KEDA (azure-servicebus trigger) |
+| Log processor | Python 3.11 |
+| Response engine | Python 3.11 + kubernetes client |
+| Observability | Prometheus + Grafana + Loki |
 | Infrastructure | Terraform (azurerm ~> 3.0) |
-| Container registry | Azure Container Registry |
-| Cluster | Azure AKS (Standard_B2als_v2) |
+| Cluster | Azure AKS, Standard_B2als_v2, malaysiawest |
 
 ---
 
-## Project Structure
+## Project structure
 
 ```
 fyp/
-├── startup.ps1                  ← rebuilds everything after terraform destroy
-├── teardown.ps1                 ← destroys all resources
+├── startup.ps1                  # Provisions and configures everything
+├── teardown.ps1                 # Destroys all Azure resources
 ├── app/
 │   ├── processor/
-│   │   ├── main.py              ← log processor entry point
-│   │   ├── requirements.txt
-│   │   ├── Dockerfile
+│   │   ├── main.py              # Log processor — dequeues, classifies, responds
+│   │   ├── bridge.py            # FastAPI bridge + Monitor 1 web app
+│   │   ├── load_test.js         # K6 load test script
 │   │   ├── send_test_messages.py
-│   │   ├── metrics_test.py      ← scaling benchmark
-│   │   └── action_benchmark.py  ← response engine benchmark
+│   │   ├── metrics_test.py      # Scaling benchmark
+│   │   ├── action_benchmark.py  # Response engine benchmark
+│   │   ├── static/              # Monitor 1 frontend (index.html, style.css, app.js)
+│   │   ├── requirements.txt
+│   │   └── Dockerfile
 │   ├── response_engine/
-│   │   ├── __init__.py
-│   │   ├── actions.py           ← Tier 1/2/3 response actions
-│   │   └── k8s_client.py        ← in-cluster Kubernetes client
+│   │   ├── actions.py           # Tier 1/2/3 response implementations
+│   │   └── k8s_client.py        # In-cluster Kubernetes client
 │   └── forwarder/
-│       ├── main.py              ← Flask HTTP receiver → Service Bus
+│       ├── main.py              # Flask HTTP receiver → Service Bus
 │       ├── requirements.txt
 │       └── Dockerfile
 ├── infra/
@@ -66,23 +74,24 @@ fyp/
 │   ├── providers.tf
 │   ├── variables.tf
 │   ├── outputs.tf
-│   ├── terraform.tfvars         ← gitignored
+│   ├── terraform.tfvars         # gitignored — contains secrets
 │   └── modules/
 │       ├── aks/
 │       ├── servicebus/
 │       └── acr/
 └── k8s/
-    ├── fluent-bit.yaml          ← ConfigMap + DaemonSet + forwarder sidecar
+    ├── fluent-bit.yaml          # ConfigMap + DaemonSet + forwarder sidecar
     ├── processor-deployment.yaml
-    ├── scaledobject.yaml        ← KEDA TriggerAuthentication + ScaledObject
-    └── rbac.yaml                ← ServiceAccount + ClusterRole + ClusterRoleBinding
+    ├── scaledobject.yaml        # KEDA TriggerAuthentication + ScaledObject
+    ├── rbac.yaml                # ServiceAccount + ClusterRole + ClusterRoleBinding
+    └── keda-metrics-apiserver-servicemonitor.yaml
 ```
 
 ---
 
-## Azure Resources
+## Azure resources
 
-All resources in resource group `rg-fyp-aks`, region `malaysiawest`.
+All in resource group `rg-fyp-aks`, region `malaysiawest`.
 
 | Resource | Name |
 |---|---|
@@ -96,52 +105,57 @@ All resources in resource group `rg-fyp-aks`, region `malaysiawest`.
 ## Setup
 
 ### Prerequisites
-- Azure CLI
-- Terraform v1.15.3
-- Docker Desktop
-- kubectl
-- Helm
-- Python 3.11+ with virtualenv
 
-### First-time setup
+- Azure CLI, Terraform v1.15.3, Docker Desktop, kubectl, Helm, Python 3.11+, K6
 
-```powershell
-# 1. Activate Python venv
-.venv\Scripts\Activate.ps1
-
-# 2. Run startup script
-.\startup.ps1
-```
-
-### Every session
+### Starting a session
 
 ```powershell
 .\startup.ps1
 ```
 
-> **Note:** Always run `az config set core.enable_broker_on_windows=false` before `az login` on Windows (UiTM tenant requirement).
+This handles everything: Terraform apply, AKS credentials, KEDA + Falco + monitoring stack install, Kubernetes manifests, and opens Grafana, the bridge server, and K6 in separate windows.
+
+| Interface | URL | Credentials |
+|---|---|---|
+| Monitor 1 (web app) | http://localhost:8888 | — |
+| Monitor 2 (Grafana) | http://localhost:3000 | admin / admin123 |
+
+> On Windows with UiTM tenant: always run `az config set core.enable_broker_on_windows=false` before `az login`. The startup script handles this automatically.
+
+### Teardown
+
+```powershell
+.\teardown.ps1
+```
 
 ---
 
-## Running Tests
+## Demo
 
-### Send test messages manually
+### Load levels
+
+Set load level via the Monitor 1 web app, or directly:
 
 ```powershell
-cd app/processor
-# Update CONNECTION_STRING first:
-# cd infra && terraform output -raw servicebus_connection_string
-python send_test_messages.py
+Invoke-WebRequest -Uri http://localhost:8888/level/low    -Method POST -UseBasicParsing
+Invoke-WebRequest -Uri http://localhost:8888/level/medium -Method POST -UseBasicParsing
+Invoke-WebRequest -Uri http://localhost:8888/level/high   -Method POST -UseBasicParsing
+Invoke-WebRequest -Uri http://localhost:8888/level/off    -Method POST -UseBasicParsing
 ```
 
-### Watch scaling in real time
+Expected pod counts on a single Standard_B2als_v2 node:
+
+| Level | Rate | Pods |
+|---|---|---|
+| Low | 1 msg/s | ~1 |
+| Medium | 3 msg/s | ~3–4 |
+| High | 8 msg/s | ~6 (node cap) |
+
+### Watch scaling live
 
 ```powershell
-# Terminal 1
 kubectl get pods -n default -w
-
-# Terminal 2
-kubectl logs -l app=log-processor -n default --follow
 ```
 
 ### Trigger a real Falco alert
@@ -150,33 +164,21 @@ kubectl logs -l app=log-processor -n default --follow
 kubectl run trigger-test --image=ubuntu --restart=Never --rm -it -- bash -c "cat /etc/shadow 2>/dev/null; exit"
 ```
 
-### Run scaling benchmark
-
-```powershell
-cd app/processor
-python metrics_test.py
-```
-
-### Run response engine benchmark
-
-```powershell
-cd app/processor
-python action_benchmark.py
-```
-
 ---
 
-## Performance Results
+## Performance
 
-### Scaling Benchmark
+### Scaling benchmark
 
-| Messages | Scale Latency | Throughput | Total Time |
+| Messages | Scale latency | Throughput | Total time |
 |---|---|---|---|
 | 10 | 27.3s | 0.30 msg/s | 53.6s |
 | 50 | 32.3s | 1.32 msg/s | 63.8s |
 | 100 | 28.1s | 2.98 msg/s | 59.4s |
 
-### Response Engine Action Latency
+Scaling latency is consistent (~28–32s) across all load levels — this is KEDA's polling interval, not a processing bottleneck. Throughput scales 10x as more pods are added, confirming horizontal scaling works as designed.
+
+### Response engine latency
 
 | Action | Latency |
 |---|---|
@@ -185,29 +187,15 @@ python action_benchmark.py
 | Tier 2 — Isolate pod | ~136ms |
 | Tier 3 — Cordon node | ~139ms |
 
-**Key findings:**
-- Scaling latency is consistent (~28–32s) regardless of load — KEDA polling overhead, not a processing bottleneck
-- Throughput scales 10x (0.30 → 2.98 msg/s) as message volume increases — horizontal scaling working as designed
-- Response engine actions complete in under 150ms — near real-time incident response
-- Total processing time stays flat despite 10x message increase
+All response actions complete under 150ms, enabling near real-time automated incident response.
 
 ---
 
-## Known Issues / Gotchas
+## Known issues
 
-- UiTM Conditional Access blocks `az account get-access-token` unless WAM is disabled first — always run `az config set core.enable_broker_on_windows=false` before `az login`
-- Service Bus connection string changes after every `terraform destroy` — always run `terraform output -raw servicebus_connection_string` and update the Kubernetes secret and any local scripts
-- `Standard_B2s` and `Standard_A2_v2` not available in `malaysiawest` for AKS — use `Standard_B2als_v2`
-- azurerm v4.x breaks auth on UiTM tenant — stay on v3.x
-- After `terraform destroy`, AKS-to-ACR attachment is lost — `startup.ps1` handles this with `az aks update --attach-acr`
-- Tier 3 (node cordon) will block pod scheduling on a single-node cluster — test scripts use a fake node name to avoid this
-
----
-
-## Teardown
-
-```powershell
-.\teardown.ps1
-```
-
-This destroys all Azure resources. Use only when done with the project.
+- **WAM / Azure CLI on Windows** — UiTM Conditional Access requires `az config set core.enable_broker_on_windows=false` before every `az login`. Startup script handles this.
+- **Service Bus connection string** — changes after every `terraform destroy`. Run `terraform output -raw servicebus_connection_string` to get the new value and update the Kubernetes secret.
+- **VM SKU** — `Standard_B2s` and `Standard_A2_v2` are unavailable in `malaysiawest`. Use `Standard_B2als_v2`.
+- **azurerm v4.x** — breaks auth on UiTM tenant. Pin to `~> 3.0`.
+- **Tier 3 on single-node clusters** — cordoning the only node blocks all pod scheduling. Test scripts use a fake node name to avoid this in development.
+- **ACR attachment** — lost after `terraform destroy`. Startup script re-attaches with `az aks update --attach-acr`.
